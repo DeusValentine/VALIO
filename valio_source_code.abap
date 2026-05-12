@@ -1219,8 +1219,8 @@ CLASS lcl_report_helper DEFINITION FINAL.
 
       gc_txt_label_so_tr             TYPE string VALUE 'Request ID(s)',
       gc_txt_label_so_user           TYPE string VALUE 'User Name(s)',
-      gc_txt_label_p_cobj            TYPE string VALUE 'Process my Objects',
-      gc_txt_label_p_cuser           TYPE string VALUE 'Process my Transport Requests',
+      gc_txt_label_p_cobj            TYPE string VALUE 'Process my Transport Requests',
+      gc_txt_label_p_cuser           TYPE string VALUE 'Process my Objects',
       gc_txt_label_so_cls            TYPE string VALUE 'Objects',
       gc_txt_label_p_quick           TYPE string VALUE 'Quick Review',
       gc_txt_label_p_detail          TYPE string VALUE 'Detailed Review',
@@ -1618,8 +1618,8 @@ CLASS lcl_report_helper IMPLEMENTATION.
   METHOD setup_text_lables.
     %_so_tr_%_app_%-text    = gc_txt_label_so_tr.
     %_so_user_%_app_%-text  = gc_txt_label_so_user.
-    %_p_cobj_%_app_%-text   = gc_txt_label_p_cuser.
-    %_p_cuser_%_app_%-text  = gc_txt_label_p_cobj.
+    %_p_cobj_%_app_%-text   = gc_txt_label_p_cobj.
+    %_p_cuser_%_app_%-text  = gc_txt_label_p_cuser.
     %_so_cls_%_app_%-text   = gc_txt_label_so_cls.
     %_p_quick_%_app_%-text  = gc_txt_label_p_quick.
     %_p_detail_%_app_%-text = gc_txt_label_p_detail.
