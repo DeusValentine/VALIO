@@ -8,21 +8,21 @@ Original Authors:
 An open-source SAP ABAP Tool that performs automatic code reviews using AI. 
 Connect it to any reasoning LLM you have access to and get instant, structured feedback on your ABAP code.
 
-## What is it?
+## 🔭 What is it?
 
 This tool automates ABAP code reviews. The main idea is to help development teams find weak and questionable places in the code before the transport release process. You can use it as an additional step in your workflow or as a self-review tool before showing the code to colleagues. Fix the main problems before they reach someone else and minimise the time spent on re-review cycles.
 
 The quality of results depends on the LLM you connect and the prompts you use.
 
-## Supported object types
+## 👉 Supported object types
 
 Currently the tool supports ABAP classes only. Support for function modules and reports may come later.
 
-## Getting started
+## ⚡Getting started
 
 ### Prerequisites
 
-You need access to any reasoning LLM API (OpenAI, Anthropic, Azure OpenAI, a local model, or anything else that accepts and returns text).
+You need access to any reasoning LLM API (SAP Joule, OpenAI, Anthropic, Azure OpenAI, a local model, or anything else that accepts and returns text).
 
 The program was developed on SAP_ABA 824. 
 It should work on older versions as well, but we have not tested this yet. 
@@ -38,7 +38,7 @@ Copy and paste the program code into local objects in your system and you are re
 
 There is one method you need to implement (class lcl_ai_helper method execute_prompt). The location is clearly marked in the code. Your implementation should call any reasoning LLM in the following format: input is a single string, output is a single string. That is all you need to start.
 
-## How to use it
+## 📄 How to use it
 
 ### Selecting objects for review
 
@@ -68,6 +68,6 @@ The program supports three output formats: ALV grid, plain text, and Excel.
 
 Excel files can be saved directly to your PC or to a server path. If you choose server export, you need to specify the destination path on the selection screen. Server export is particularly helpful when running the program in the background for a large number of objects.
 
-## Contributing
+## 🌱 Contributing
 
 Contributions are welcome. Feel free to open issues or submit pull requests.
