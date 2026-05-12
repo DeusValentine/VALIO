@@ -36,7 +36,7 @@ Copy and paste the program code into local objects in your system and you are re
 
 ### Configuration
 
-There is one method you need to implement. The location is clearly marked in the code. Your implementation should call any reasoning LLM in the following format: input is a single string, output is a single string. That is all you need to start.
+There is one method you need to implement (class lcl_ai_helper method execute_prompt). The location is clearly marked in the code. Your implementation should call any reasoning LLM in the following format: input is a single string, output is a single string. That is all you need to start.
 
 ## How to use it
 
