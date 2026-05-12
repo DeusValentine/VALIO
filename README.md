@@ -1,4 +1,4 @@
-# VALIO
+# VALIO.
 VALIO. — ABAP Code Review AI Tool 
 
 Original Authors:
