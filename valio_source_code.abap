@@ -123,7 +123,6 @@ CLASS lcl_ai_helper IMPLEMENTATION.
 
     IF iv_class_name IS INITIAL.
       MESSAGE gc_msg_empty_parameter TYPE 'E'.
-      RETURN.
     ENDIF.
 
     /ui2/cl_json=>deserialize( EXPORTING json = normalize_format( iv_string = iv_json )
@@ -131,7 +130,6 @@ CLASS lcl_ai_helper IMPLEMENTATION.
 
     IF rt_suggestion IS INITIAL.
       MESSAGE gc_msg_deserialize_error TYPE 'E'.
-      RETURN.
     ENDIF.
 
     LOOP AT rt_suggestion ASSIGNING FIELD-SYMBOL(<fs_suggestion>).
@@ -415,7 +413,6 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
     OR is_layout IS SUPPLIED AND is_layout IS INITIAL
     OR it_hyperlinks IS SUPPLIED AND it_hyperlinks IS INITIAL.
       MESSAGE gc_msg_supplied_initial_param TYPE 'E'.
-      RETURN.
     ENDIF.
 
     DATA(lt_data) = REF #( it_data ).
@@ -433,7 +430,6 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
                                                                              r_aggregations = salv_table->get_aggregations( ) ).
         CATCH cx_salv_msg INTO DATA(lx_salv).
           MESSAGE lx_salv->get_text( ) TYPE 'E'.
-          RETURN.
       ENDTRY.
     ELSE.
       lt_fcat = it_fieldcat.
@@ -455,7 +451,6 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
 
     IF iv_file_path IS INITIAL.
       MESSAGE gc_msg_empty_file_path TYPE 'E'.
-      RETURN.
     ENDIF.
 
     DATA(it_raw_string) = cl_bcs_convert=>xstring_to_solix( iv_xstring = iv_file_data ).
@@ -473,14 +468,12 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
 
     IF iv_file_path IS INITIAL.
       MESSAGE gc_msg_empty_file_path TYPE 'E'.
-      RETURN.
     ENDIF.
 
     OPEN DATASET iv_file_path FOR OUTPUT IN BINARY MODE MESSAGE msg.
     IF sy-subrc <> 0.
       MESSAGE gc_msg_failed_to_open_dataset TYPE 'E'.
       MESSAGE msg TYPE 'E'.
-      RETURN.
     ENDIF.
 
     TRANSFER iv_file_data TO iv_file_path.
@@ -590,7 +583,6 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
                                 CHANGING  t_table      = lt_suggestion_with_tech_info ).
       CATCH cx_salv_msg INTO DATA(lx_salv).
         MESSAGE lx_salv->get_text( ) TYPE 'E'.
-        RETURN.
     ENDTRY.
 
     beautify_salv_table( io_salv_table = salv_table ).
@@ -607,7 +599,6 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
 
     IF it_suggestion IS INITIAL.
       MESSAGE gc_msg_empty_parameter TYPE 'E'.
-      RETURN.
     ENDIF.
 
     DATA(lt_suggestion_with_tech_info) = populate_technical_info( it_suggestion = it_suggestion ).
@@ -629,7 +620,6 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
         OTHERS                    = 5 ).
     IF sy-subrc <> 0 OR lv_full_path IS INITIAL.
       MESSAGE gc_msg_save_dialog_fail TYPE 'E'.
-      RETURN.
     ENDIF.
 
     export_with_gui_download( iv_file_path = lv_full_path
@@ -641,7 +631,6 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
 
     IF iv_file_path IS INITIAL.
       MESSAGE gc_msg_empty_file_path TYPE 'E'.
-      RETURN.
     ENDIF.
 
     DATA(lt_suggestion_with_tech_info) = populate_technical_info( it_suggestion = it_suggestion ).
