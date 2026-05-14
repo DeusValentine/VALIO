@@ -49,6 +49,9 @@ You can select review objects in two ways: by transport IDs or by object names.
 
 For transport-based selection the screen provides transport ID and user name fields. You can enter specific transport IDs or a user name to retrieve their transports.
 
+<img width="550" height="229" alt="изображение" src="https://github.com/user-attachments/assets/dffa887a-f245-4cd7-baf7-d70f59b2b44a" />
+
+
 There is also a "Process only my transport requests" checkbox. When checked, transport IDs and user name fields are ignored and the program returns results only for active requests where you are involved. Note that in this case you will get objects from all persons in the request unless you also check "Get only my objects", which narrows the scope to objects from your tasks only.
 
 ### Review modes
@@ -63,11 +66,15 @@ Detailed mode combines full-object processing with a method-by-method review. Fo
 
 You can specify your own prompt by clicking the prompt edit button. Prompts can be saved as variant options, so you do not have to maintain them every time you enter the report.
 
+<img width="1919" height="1079" alt="Screenshot 2026-05-14 121110" src="https://github.com/user-attachments/assets/f2ef1f2c-fce3-4cdb-b77c-fdb7417d7d30" />
+
 This is useful when you want to focus on specific aspects of your code. For example, you can create a prompt that checks for performance issues, another one that evaluates SOLID principles compliance, and so on. Build multiple review scenarios according to your needs.
 
 ### Output options
 
 The program supports three output formats: ALV grid, plain text, and Excel.
+
+<img width="1919" height="1079" alt="Screenshot 2026-05-14 120745" src="https://github.com/user-attachments/assets/21da51a4-b67d-471c-967b-b38aaec87c56" />
 
 Excel files can be saved directly to your PC or to a server path. If you choose server export, you need to specify the destination path on the selection screen. Server export is particularly helpful when running the program in the background for a large number of objects.
 
