@@ -7,7 +7,7 @@ Original Authors:
 - Ihar Kantsevich 💀
 
 An open-source SAP ABAP Tool that performs automatic code reviews using AI. 
-Connect it to any SAP officially trusted reasoning LLM you have access to and get instant, structured feedback on your ABAP code.
+Connect it to any SAP officially trusted (released) reasoning LLM API you have access to and get instant, structured feedback on your ABAP code.
 
 ## 🔭 What is it?
 
