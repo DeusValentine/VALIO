@@ -7,13 +7,13 @@ Original Authors:
 - Ihar Kantsevich 💀
 
 An open-source SAP ABAP Tool that performs automatic code reviews using AI. 
-Connect it to any reasoning LLM you have access to and get instant, structured feedback on your ABAP code.
+Connect it to any SAP oficailly trusted reasoning LLM you have access to and get instant, structured feedback on your ABAP code.
 
 ## 🔭 What is it?
 
 This tool automates ABAP code reviews. The main idea is to help development teams find weak and questionable places in the code before the transport release process. You can use it as an additional step in your workflow or as a self-review tool before showing the code to colleagues. Fix the main problems before they reach someone else and minimise the time spent on re-review cycles.
 
-The quality of results depends on the LLM you connect and the prompts you use.
+The quality of results depends on the API you connect and the prompts you use.
 
 ## 👉 Supported object types
 
@@ -23,7 +23,7 @@ Currently the tool supports ABAP classes only. Support for function modules and 
 
 ### Prerequisites
 
-You need access to any reasoning LLM API (SAP Joule, OpenAI, Anthropic, Azure OpenAI, a local model, or anything else that accepts and returns text).
+You need access to any reasoning LLM API SAP oficially allows to use (SAP Joule, OpenAI, Anthropic, Azure OpenAI, a local model, or anything else that accepts and returns text).
 
 The program was developed on SAP_ABA 824. 
 It should work on older versions as well, but we have not tested this yet. 
