@@ -17,7 +17,7 @@ The quality of results depends on the API you connect and the prompts you use.
 
 ## 👉 Supported object types
 
-Currently the tool supports ABAP classes only. Support for function modules and reports may come later.
+Currently the tool supports ABAP classes and function modules. Support for reports may come later.
 
 ## ⚡Getting started
 
