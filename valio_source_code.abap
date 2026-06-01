@@ -7,14 +7,23 @@ REPORT z_valio_code_review LINE-SIZE 132.
 
 TYPES:
   BEGIN OF ts_suggestion,
-    class_name TYPE string,
-    method     TYPE string,
-    suggestion TYPE string,
-    priority   TYPE string,
-    user       TYPE string,
+    object_type              TYPE string,
+    object_name              TYPE string,
+    source_code_section_name TYPE string,
+    suggestion               TYPE string,
+    priority                 TYPE string,
+    user                     TYPE string,
   END OF ts_suggestion,
-  tt_suggestion TYPE STANDARD TABLE OF ts_suggestion WITH DEFAULT KEY,
-  tt_class_name TYPE STANDARD TABLE OF seoclsname WITH DEFAULT KEY.
+
+  BEGIN OF ts_object_definition,
+    object_name TYPE string,
+    object_type TYPE string,
+  END OF ts_object_definition,
+
+  tt_suggestion        TYPE STANDARD TABLE OF ts_suggestion WITH DEFAULT KEY,
+  tt_object_definition TYPE STANDARD TABLE OF ts_object_definition WITH DEFAULT KEY,
+  tt_class_name        TYPE STANDARD TABLE OF seoclsname WITH DEFAULT KEY,
+  tt_fm_name           TYPE STANDARD TABLE OF rs38l_fnam WITH DEFAULT KEY.
 
 CLASS lcl_ai_helper DEFINITION FINAL.
 
@@ -35,7 +44,8 @@ CLASS lcl_ai_helper DEFINITION FINAL.
       get_final_prompt IMPORTING iv_user_prompt          TYPE stringval
                        RETURNING VALUE(rv_target_prompt) TYPE stringval,
 
-      deserialize_suggestions IMPORTING !iv_class_name       TYPE string
+      deserialize_suggestions IMPORTING !iv_object_type      TYPE string
+                                        !iv_object_name      TYPE string
                                         !iv_json             TYPE string
                                         !iv_user             TYPE string
                               RETURNING VALUE(rt_suggestion) TYPE tt_suggestion,
@@ -71,7 +81,7 @@ CLASS lcl_ai_helper IMPLEMENTATION.
                     && |{ cl_abap_char_utilities=>newline } - Return ONLY a valid JSON array.|
                     && |{ cl_abap_char_utilities=>newline } - Each element must follow this structure:|
                     && |{ cl_abap_char_utilities=>newline }   \{|
-                    && |{ cl_abap_char_utilities=>newline }     "method": "<method_name_or_global_if_not_applicable>",|
+                    && |{ cl_abap_char_utilities=>newline }     "source_code_section_name": "<source_code_section_name_or_global_if_not_applicable>",|
                     && |{ cl_abap_char_utilities=>newline }     "suggestion": "<short, precise recommendation>",|
                     && |{ cl_abap_char_utilities=>newline }     "priority": "<HIGH\|MEDIUM\|LOW>"|
                     && |{ cl_abap_char_utilities=>newline }   \}|
@@ -102,7 +112,7 @@ CLASS lcl_ai_helper IMPLEMENTATION.
                      && |{ cl_abap_char_utilities=>newline } but avoid trivial or redundant points.|
                      && |{ cl_abap_char_utilities=>newline } - Each point must be concise, actionable, and specific.|
                      && |{ cl_abap_char_utilities=>newline } - Do not include any text outside the JSON output.|
-                     && |{ cl_abap_char_utilities=>newline } - Use "GLOBAL" as method if the issue is not tied to a specific method.|
+                     && |{ cl_abap_char_utilities=>newline } - Use "GLOBAL" as source_code_section_name if the issue is not tied to a specific method.|
                      && |{ cl_abap_char_utilities=>newline } - For GLOBAL be ultra precise|
                      && |{ cl_abap_char_utilities=>newline } - Do not use complex words for explanations|
                      && |{ cl_abap_char_utilities=>newline } - Be precise and specific. Point exacly to the weak places|
@@ -121,7 +131,7 @@ CLASS lcl_ai_helper IMPLEMENTATION.
 
   METHOD deserialize_suggestions.
 
-    IF iv_class_name IS INITIAL.
+    IF iv_object_name IS INITIAL.
       MESSAGE gc_msg_empty_parameter TYPE 'E'.
     ENDIF.
 
@@ -133,9 +143,10 @@ CLASS lcl_ai_helper IMPLEMENTATION.
     ENDIF.
 
     LOOP AT rt_suggestion ASSIGNING FIELD-SYMBOL(<fs_suggestion>).
-      <fs_suggestion>-class_name = to_upper( iv_class_name ).
-      <fs_suggestion>-user       = iv_user.
-      <fs_suggestion>-method     = to_upper( <fs_suggestion>-method ).
+      <fs_suggestion>-object_type = iv_object_type.
+      <fs_suggestion>-object_name = to_upper( iv_object_name ).
+      <fs_suggestion>-source_code_section_name = to_upper( <fs_suggestion>-source_code_section_name ).
+      <fs_suggestion>-user = iv_user.
     ENDLOOP.
   ENDMETHOD.
 
@@ -169,25 +180,35 @@ CLASS lcl_ai_helper IMPLEMENTATION.
 ENDCLASS.
 
 
-CLASS lcl_transport_extractor DEFINITION FINAL.
+CLASS lcl_object_extractor DEFINITION FINAL.
 
   PUBLIC SECTION.
+    CONSTANTS:
+      gc_object_def_type_class TYPE string VALUE 'CLASS',
+      gc_object_def_type_fm    TYPE string VALUE 'FM'.
+
     TYPES:
-      tt_user         TYPE STANDARD TABLE OF syuname WITH DEFAULT KEY.
+      tt_user TYPE STANDARD TABLE OF syuname WITH DEFAULT KEY.
 
     METHODS:
-      get_class_from_tr_request IMPORTING !iv_fl_current_objects_only TYPE abap_bool
-                                          !iv_fl_current_user_only    TYPE abap_bool
-                                          !it_tr_requests_headers     TYPE trwbo_request_headers
-                                          !it_user                    TYPE tt_user
-                                RETURNING VALUE(rt_class)             TYPE tt_class_name.
+      get_objects_by_names IMPORTING !it_object_name  TYPE string_table
+                           RETURNING VALUE(rt_object) TYPE tt_object_definition,
+
+      get_objects_by_tr_requests IMPORTING !iv_fl_current_objects_only TYPE abap_bool
+                                           !iv_fl_current_user_only    TYPE abap_bool
+                                           !it_tr_request_header       TYPE trwbo_request_headers
+                                           !it_user                    TYPE tt_user
+                                 RETURNING VALUE(rt_class)             TYPE tt_object_definition.
 
   PRIVATE SECTION.
     CONSTANTS:
       gc_request_functions_all      TYPE string VALUE 'CDEFGKMOPQRSTWX',
+      gc_status_modifiable_released TYPE string VALUE 'DLP ',
       gc_objects_type_class_include TYPE string VALUE 'CINC',
       gc_objects_type_class         TYPE string VALUE 'CLAS',
-      gc_status_modifiable_released TYPE string VALUE 'DLP ',
+      gc_objects_type_func          TYPE string VALUE 'FUNC',
+      gc_objects_type_fm            TYPE string VALUE 'FUGR',
+      gc_function_group_prefix      TYPE string VALUE 'SAPL',
       gc_trfunction_workbench       TYPE string VALUE 'K'.
 
     METHODS:
@@ -195,44 +216,91 @@ CLASS lcl_transport_extractor DEFINITION FINAL.
                                        !iv_username_pattern TYPE syst_uname OPTIONAL
                              RETURNING VALUE(rt_tr_request) TYPE trwbo_request_headers,
 
-      get_classes_from_tr_requests IMPORTING !it_tr_requests_headers  TYPE trwbo_request_headers
-                                             !iv_fl_current_user_only TYPE abap_bool OPTIONAL
-                                   RETURNING VALUE(rt_class)          TYPE tt_class_name.
+      get_objects_by_tr_request_hdrs IMPORTING !it_tr_request_header    TYPE trwbo_request_headers
+                                               !iv_fl_current_user_only TYPE abap_bool OPTIONAL
+                                     RETURNING VALUE(rt_class)          TYPE tt_object_definition,
+
+      get_modules_in_function_group IMPORTING !it_function_group_name  TYPE string_table
+                                    RETURNING VALUE(rt_funtion_module) TYPE tt_object_definition.
 ENDCLASS.
 
-CLASS lcl_transport_extractor IMPLEMENTATION.
 
-  METHOD get_class_from_tr_request.
 
-    DATA lt_tr_requests TYPE trwbo_request_headers.
+CLASS lcl_object_extractor IMPLEMENTATION.
 
-    IF iv_fl_current_objects_only = abap_true.
-      lt_tr_requests = get_tr_request_headers( iv_username_pattern = sy-uname ).
-    ELSE.
-      lt_tr_requests = it_tr_requests_headers.
-      LOOP AT it_user ASSIGNING FIELD-SYMBOL(<ls_user>).
-        APPEND LINES OF get_tr_request_headers( iv_username_pattern = <ls_user> ) TO lt_tr_requests.
-      ENDLOOP.
+
+  METHOD get_objects_by_names.
+
+    DATA: lt_wb_request       TYPE if_ris_quick_search=>ty_t_workbench_requests,
+          lo_ris_quick_search TYPE REF TO if_ris_quick_search,
+          lt_search_result    TYPE cl_wb_browser_util=>tt_sewb_quicksearch_value_help.
+
+    IF it_object_name IS INITIAL.
+      RETURN.
     ENDIF.
-    SORT lt_tr_requests BY trkorr.
-    DELETE ADJACENT DUPLICATES FROM lt_tr_requests COMPARING trkorr.
 
-    RETURN get_classes_from_tr_requests( it_tr_requests_headers = lt_tr_requests
-                                         iv_fl_current_user_only = iv_fl_current_user_only ).
+    LOOP AT it_object_name ASSIGNING FIELD-SYMBOL(<lv_obj_name>).
+      lo_ris_quick_search = NEW cl_ris_quick_search( ).
+      TRY.
+          lo_ris_quick_search->execute( EXPORTING i_query       = <lv_obj_name>
+                                        IMPORTING e_wb_requests = lt_wb_request ).
+
+          cl_wb_browser_util=>map_wb_requests_to_value_help( EXPORTING i_wb_requests = lt_wb_request
+                                                             IMPORTING e_value_helps = lt_search_result ).
+        CATCH cx_ris_exception INTO DATA(lx_ris).
+          MESSAGE lx_ris->get_text( ) TYPE 'E'.
+      ENDTRY.
+
+      LOOP AT lt_search_result ASSIGNING FIELD-SYMBOL(<ls_res>)
+           WHERE object = gc_objects_type_class OR object = gc_objects_type_class_include
+              OR object = gc_objects_type_func  OR object = gc_objects_type_fm.
+
+        APPEND VALUE #( object_name = <ls_res>-obj_name
+                        object_type = SWITCH #( <ls_res>-object WHEN gc_objects_type_class OR gc_objects_type_class_include
+                                                                THEN gc_object_def_type_class
+                                                                WHEN gc_objects_type_fm OR gc_objects_type_func
+                                                                THEN gc_object_def_type_fm ) ) TO rt_object.
+      ENDLOOP.
+
+    ENDLOOP.
+
   ENDMETHOD.
 
 
-  METHOD get_classes_from_tr_requests.
+  METHOD get_objects_by_tr_requests.
 
-    DATA: lt_requests     TYPE trwbo_requests,
-          lt_all_requests TYPE trwbo_requests.
+    DATA lt_tr_request TYPE trwbo_request_headers.
 
-    LOOP AT it_tr_requests_headers ASSIGNING FIELD-SYMBOL(<fs_tr_req_header>).
+    IF iv_fl_current_objects_only = abap_true.
+      lt_tr_request = get_tr_request_headers( iv_username_pattern = sy-uname ).
+    ELSE.
+      lt_tr_request = it_tr_request_header.
+      LOOP AT it_user ASSIGNING FIELD-SYMBOL(<ls_user>).
+        APPEND LINES OF get_tr_request_headers( iv_username_pattern = <ls_user> ) TO lt_tr_request.
+      ENDLOOP.
+    ENDIF.
+
+    SORT lt_tr_request BY trkorr.
+    DELETE ADJACENT DUPLICATES FROM lt_tr_request COMPARING trkorr.
+
+    RETURN get_objects_by_tr_request_hdrs( it_tr_request_header = lt_tr_request
+                                           iv_fl_current_user_only = iv_fl_current_user_only ).
+  ENDMETHOD.
+
+
+  METHOD get_objects_by_tr_request_hdrs.
+
+    DATA: lt_function_group_name TYPE string_table,
+          lt_request             TYPE trwbo_requests,
+          lt_all_request         TYPE trwbo_requests,
+          ls_object_definition   TYPE ts_object_definition.
+
+    LOOP AT it_tr_request_header ASSIGNING FIELD-SYMBOL(<fs_tr_req_header>).
       CALL FUNCTION 'TR_READ_REQUEST_WITH_TASKS'
         EXPORTING
           iv_trkorr     = <fs_tr_req_header>-trkorr
         IMPORTING
-          et_requests   = lt_requests
+          et_requests   = lt_request
         EXCEPTIONS
           invalid_input = 1
           OTHERS        = 2.
@@ -240,26 +308,68 @@ CLASS lcl_transport_extractor IMPLEMENTATION.
         CONTINUE.
       ENDIF.
 
-      APPEND LINES OF lt_requests TO lt_all_requests.
+      APPEND LINES OF lt_request TO lt_all_request.
     ENDLOOP.
 
     IF iv_fl_current_user_only = abap_true.
-      DELETE lt_all_requests WHERE h-as4user <> sy-uname.
+      DELETE lt_all_request WHERE h-as4user <> sy-uname.
     ENDIF.
 
-    LOOP AT lt_all_requests ASSIGNING FIELD-SYMBOL(<ls_request_details>).
+    LOOP AT lt_all_request ASSIGNING FIELD-SYMBOL(<ls_request_detail>).
 
-      LOOP AT <ls_request_details>-objects ASSIGNING FIELD-SYMBOL(<ls_object>)
-        WHERE object  = gc_objects_type_class_include
-        OR object = gc_objects_type_class.
+      LOOP AT <ls_request_detail>-objects ASSIGNING FIELD-SYMBOL(<ls_object>).
 
-        SPLIT <ls_object>-obj_name AT '=' INTO TABLE DATA(lv_1) .
-        rt_class = VALUE #( BASE rt_class ( CONV #( VALUE #( lv_1[ 1 ] OPTIONAL ) ) ) ).
+        SPLIT <ls_object>-obj_name AT '=' INTO TABLE DATA(lt_split).
+        ls_object_definition-object_name = VALUE #( lt_split[ 1 ] OPTIONAL ).
+        CASE <ls_object>-object.
+
+          WHEN gc_objects_type_class_include OR gc_objects_type_class.
+            ls_object_definition-object_type = gc_object_def_type_class.
+
+          WHEN gc_objects_type_func.
+            ls_object_definition-object_type = gc_object_def_type_fm.
+
+          WHEN gc_objects_type_fm.
+            APPEND |{ gc_function_group_prefix }{ ls_object_definition-object_name }| TO lt_function_group_name.
+            CONTINUE.
+
+          WHEN OTHERS.
+            CONTINUE.
+        ENDCASE.
+
+        APPEND ls_object_definition TO rt_class.
       ENDLOOP.
     ENDLOOP.
 
-    SORT rt_class.
-    DELETE ADJACENT DUPLICATES FROM rt_class.
+    APPEND LINES OF get_modules_in_function_group( it_function_group_name = lt_function_group_name ) TO rt_class.
+
+    SORT rt_class BY object_name.
+    DELETE ADJACENT DUPLICATES FROM rt_class COMPARING object_name.
+  ENDMETHOD.
+
+
+  METHOD get_modules_in_function_group.
+
+    DATA lt_function_group_name TYPE STANDARD TABLE OF pname.
+
+    IF it_function_group_name IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    lt_function_group_name = VALUE #( FOR <ls_fg> IN it_function_group_name ( CONV #( <ls_fg> ) ) ).
+
+    " select function modules names that belong to function group
+    SELECT funcname
+      FROM tfdir
+      FOR ALL ENTRIES IN @lt_function_group_name
+           WHERE pname = @lt_function_group_name-table_line
+    INTO TABLE @DATA(lt_function_module_name).
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    APPEND LINES OF VALUE tt_object_definition( FOR <lv_fm> IN lt_function_module_name ( object_name = <lv_fm>-funcname
+                                                                                         object_type = gc_object_def_type_fm ) ) TO rt_funtion_module.
   ENDMETHOD.
 
 
@@ -287,6 +397,8 @@ CLASS lcl_transport_extractor IMPLEMENTATION.
 
     DELETE rt_tr_request WHERE trfunction <> gc_trfunction_workbench.
   ENDMETHOD.
+
+
 ENDCLASS.
 
 
@@ -316,49 +428,52 @@ CLASS lcl_suggestions_exporter DEFINITION FINAL.
   PRIVATE SECTION.
 
     CONSTANTS:
-      gc_file_type_bin           TYPE char10 VALUE 'BIN',
-      gc_priority_high           TYPE string VALUE 'HIGH',
-      gc_priority_medium         TYPE string VALUE 'MEDIUM',
-      gc_priority_low            TYPE string VALUE 'LOW',
+      gc_file_type_bin            TYPE char10 VALUE 'BIN',
+      gc_priority_high            TYPE string VALUE 'HIGH',
+      gc_priority_medium          TYPE string VALUE 'MEDIUM',
+      gc_priority_low             TYPE string VALUE 'LOW',
 
-      gc_sort_priority_high      TYPE string VALUE '1',
-      gc_sort_priority_medium    TYPE string VALUE '2',
-      gc_sort_priority_low       TYPE string VALUE '3',
-      gc_sort_priority_default   TYPE string VALUE '4',
+      gc_sort_priority_high       TYPE string VALUE '1',
+      gc_sort_priority_medium     TYPE string VALUE '2',
+      gc_sort_priority_low        TYPE string VALUE '3',
+      gc_sort_priority_default    TYPE string VALUE '4',
 
-      gc_column_name_color       TYPE lvc_fname VALUE 'COLOR',
-      gc_column_name_sorting_key TYPE lvc_fname VALUE 'SORTING_KEY',
-      gc_column_name_class_name  TYPE lvc_fname VALUE 'CLASS_NAME',
-      gc_column_name_method      TYPE lvc_fname VALUE 'METHOD',
-      gc_column_name_suggestion  TYPE lvc_fname VALUE 'SUGGESTION',
-      gc_column_name_priority    TYPE lvc_fname VALUE 'PRIORITY',
-      gc_column_name_user        TYPE lvc_fname VALUE 'USER',
+      gc_column_name_color        TYPE lvc_fname VALUE 'COLOR',
+      gc_column_name_sorting_key  TYPE lvc_fname VALUE 'SORTING_KEY',
+      gc_column_name_object_type  TYPE lvc_fname VALUE 'OBJECT_TYPE',
+      gc_column_name_object_name  TYPE lvc_fname VALUE 'OBJECT_NAME',
+      gc_column_name_code_section TYPE lvc_fname VALUE 'SOURCE_CODE_SECTION_NAME',
+      gc_column_name_suggestion   TYPE lvc_fname VALUE 'SUGGESTION',
+      gc_column_name_priority     TYPE lvc_fname VALUE 'PRIORITY',
+      gc_column_name_user         TYPE lvc_fname VALUE 'USER',
 
-      gc_column_text_class_name  TYPE string VALUE 'Class',
-      gc_column_text_method      TYPE string VALUE 'Method',
-      gc_column_text_suggestion  TYPE string VALUE 'Comment',
-      gc_column_text_priority    TYPE string VALUE 'Priority',
-      gc_column_text_user        TYPE string VALUE 'User',
+      gc_column_text_object_type  TYPE string VALUE 'Type',
+      gc_column_text_object_name  TYPE string VALUE 'Object',
+      gc_column_text_code_section TYPE string VALUE 'Code section name',
+      gc_column_text_suggestion   TYPE string VALUE 'Comment',
+      gc_column_text_priority     TYPE string VALUE 'Priority',
+      gc_column_text_user         TYPE string VALUE 'User',
 
-      gc_method_name_global      TYPE string VALUE 'GLOBAL',
-      gc_file_extension_xlsx     TYPE string VALUE 'XLSX',
+      gc_method_name_global       TYPE string VALUE 'GLOBAL',
+      gc_file_extension_xlsx      TYPE string VALUE 'XLSX',
 
-      gc_default_file_name       TYPE string VALUE 'Code review',
-      gc_defalult_intense_value  TYPE i VALUE 1,
+      gc_default_file_name        TYPE string VALUE 'Code review',
+      gc_defalult_intense_value   TYPE i VALUE 1,
 
-      gc_color_code_red          TYPE i VALUE 6,
-      gc_color_code_orange       TYPE i VALUE 7,
-      gc_color_code_yellow       TYPE i VALUE 3.
+      gc_color_code_red           TYPE i VALUE 6,
+      gc_color_code_orange        TYPE i VALUE 7,
+      gc_color_code_yellow        TYPE i VALUE 3.
 
     TYPES:
       BEGIN OF ts_suggestion_with_tech_info,
-        class_name  TYPE string,
-        method      TYPE string,
-        suggestion  TYPE string,
-        priority    TYPE string,
-        user        TYPE string,
-        sorting_key TYPE string,
-        color       TYPE lvc_t_scol,
+        object_type              TYPE string,
+        object_name              TYPE string,
+        source_code_section_name TYPE string,
+        suggestion               TYPE string,
+        priority                 TYPE string,
+        user                     TYPE string,
+        sorting_key              TYPE string,
+        color                    TYPE lvc_t_scol,
       END OF ts_suggestion_with_tech_info,
 
       tt_suggestion_with_tech_info TYPE STANDARD TABLE OF ts_suggestion_with_tech_info WITH DEFAULT KEY.
@@ -368,7 +483,7 @@ CLASS lcl_suggestions_exporter DEFINITION FINAL.
                                       !it_sort          TYPE lvc_t_sort OPTIONAL
                                       !it_filt          TYPE lvc_t_filt OPTIONAL
                                       !is_layout        TYPE lvc_s_layo OPTIONAL
-                                      !it_hyperlinks    TYPE lvc_t_hype OPTIONAL
+                                      !it_hyperlink     TYPE lvc_t_hype OPTIONAL
                             CHANGING  !it_data          TYPE STANDARD TABLE
                             RETURNING VALUE(rv_xstring) TYPE xstring,
 
@@ -404,14 +519,13 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
 
     IF it_data IS INITIAL.
       MESSAGE gc_msg_empty_parameter TYPE 'E'.
-      RETURN.
     ENDIF.
 
     IF it_fieldcat IS SUPPLIED AND it_fieldcat IS INITIAL
     OR it_sort IS SUPPLIED AND it_sort IS INITIAL
     OR it_filt IS SUPPLIED AND it_filt IS INITIAL
     OR is_layout IS SUPPLIED AND is_layout IS INITIAL
-    OR it_hyperlinks IS SUPPLIED AND it_hyperlinks IS INITIAL.
+    OR it_hyperlink IS SUPPLIED AND it_hyperlink IS INITIAL.
       MESSAGE gc_msg_supplied_initial_param TYPE 'E'.
     ENDIF.
 
@@ -442,7 +556,7 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
                                                              t_fieldcatalog       = lt_fcat
                                                              t_sort               = it_sort
                                                              t_filter             = it_filt
-                                                             t_hyperlinks         = it_hyperlinks )
+                                                             t_hyperlinks         = it_hyperlink )
                                                    IMPORTING er_result_file       = rv_xstring ).
   ENDMETHOD.
 
@@ -495,10 +609,10 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
     ENDIF.
 
     rv_code = SWITCH lvc_s_scol( is_suggestion-priority
-                    WHEN gc_priority_high   THEN VALUE #( fname = gc_column_name_priority color = VALUE #( col = gc_color_code_red    int = gc_defalult_intense_value ) )
-                    WHEN gc_priority_medium THEN VALUE #( fname = gc_column_name_priority color = VALUE #( col = gc_color_code_orange int = gc_defalult_intense_value ) )
-                    WHEN gc_priority_low    THEN VALUE #( fname = gc_column_name_priority color = VALUE #( col = gc_color_code_yellow int = gc_defalult_intense_value ) )
-                    ELSE VALUE #( ) ).
+                                WHEN gc_priority_high   THEN VALUE #( fname = gc_column_name_priority color = VALUE #( col = gc_color_code_red    int = gc_defalult_intense_value ) )
+                                WHEN gc_priority_medium THEN VALUE #( fname = gc_column_name_priority color = VALUE #( col = gc_color_code_orange int = gc_defalult_intense_value ) )
+                                WHEN gc_priority_low    THEN VALUE #( fname = gc_column_name_priority color = VALUE #( col = gc_color_code_yellow int = gc_defalult_intense_value ) )
+                                ELSE VALUE #( ) ).
   ENDMETHOD.
 
 
@@ -509,14 +623,15 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
     ENDIF.
 
     DATA(lv_suggestion) = is_suggestion.
-    CONDENSE: lv_suggestion-class_name NO-GAPS, lv_suggestion-method NO-GAPS.
+    CONDENSE: lv_suggestion-object_name NO-GAPS, lv_suggestion-source_code_section_name NO-GAPS.
 
-    rv_key = |{ lv_suggestion-class_name }|
+    rv_key = |{ lv_suggestion-object_name }|
              && |{ SWITCH stringval( is_suggestion-priority WHEN gc_priority_high   THEN gc_sort_priority_high
                                                             WHEN gc_priority_medium THEN gc_sort_priority_medium
                                                             WHEN gc_priority_low    THEN gc_sort_priority_low
                                                                                     ELSE gc_sort_priority_default ) }|
-             && |{ SWITCH stringval( is_suggestion-method WHEN gc_method_name_global THEN gc_sort_priority_high ELSE lv_suggestion-method ) }|.
+             && |{ SWITCH stringval( is_suggestion-source_code_section_name WHEN gc_method_name_global THEN gc_sort_priority_high
+                                                                                                       ELSE lv_suggestion-source_code_section_name ) }|.
   ENDMETHOD.
 
 
@@ -524,13 +639,14 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
 
     rt_suggestion_with_tech_info = VALUE #( FOR <ls_suggestion> IN it_suggestion
                                             WHERE ( table_line IS NOT INITIAL )
-                                                  ( class_name  = <ls_suggestion>-class_name
-                                                    method      = <ls_suggestion>-method
-                                                    suggestion  = <ls_suggestion>-suggestion
-                                                    priority    = <ls_suggestion>-priority
-                                                    user        = <ls_suggestion>-user
-                                                    sorting_key = calculate_sorting_key( is_suggestion = <ls_suggestion> )
-                                                    color       = VALUE #( ( calculate_color( is_suggestion = <ls_suggestion> ) ) ) ) ).
+                                                  ( object_type              = <ls_suggestion>-object_type
+                                                    object_name              = <ls_suggestion>-object_name
+                                                    source_code_section_name = <ls_suggestion>-source_code_section_name
+                                                    suggestion               = <ls_suggestion>-suggestion
+                                                    priority                 = <ls_suggestion>-priority
+                                                    user                     = <ls_suggestion>-user
+                                                    sorting_key              = calculate_sorting_key( is_suggestion = <ls_suggestion> )
+                                                    color                    = VALUE #( ( calculate_color( is_suggestion = <ls_suggestion> ) ) ) ) ).
   ENDMETHOD.
 
 
@@ -544,13 +660,17 @@ CLASS lcl_suggestions_exporter IMPLEMENTATION.
         io_salv_table->get_columns( )->set_color_column( value = gc_column_name_color ).
         io_salv_table->get_columns( )->get_column( columnname = gc_column_name_sorting_key )->set_visible( if_salv_c_bool_sap=>false ).
 
-        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_class_name )->set_short_text( CONV scrtext_s( gc_column_text_class_name ) ).
-        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_class_name )->set_medium_text( CONV scrtext_m( gc_column_text_class_name ) ).
-        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_class_name )->set_long_text( CONV scrtext_l( gc_column_text_class_name ) ).
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_object_type )->set_short_text( CONV scrtext_s( gc_column_text_object_type ) ).
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_object_type )->set_medium_text( CONV scrtext_m( gc_column_text_object_type ) ).
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_object_type )->set_long_text( CONV scrtext_l( gc_column_text_object_type ) ).
 
-        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_method )->set_short_text( CONV scrtext_s( gc_column_text_method ) ).
-        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_method )->set_medium_text( CONV scrtext_m( gc_column_text_method ) ).
-        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_method )->set_long_text( CONV scrtext_l( gc_column_text_method ) ).
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_object_name )->set_short_text( CONV scrtext_s( gc_column_text_object_name ) ).
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_object_name )->set_medium_text( CONV scrtext_m( gc_column_text_object_name ) ).
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_object_name )->set_long_text( CONV scrtext_l( gc_column_text_object_name ) ).
+
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_code_section )->set_short_text( CONV scrtext_s( gc_column_text_code_section ) ).
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_code_section )->set_medium_text( CONV scrtext_m( gc_column_text_code_section ) ).
+        io_salv_table->get_columns( )->get_column( columnname = gc_column_name_code_section )->set_long_text( CONV scrtext_l( gc_column_text_code_section ) ).
 
         io_salv_table->get_columns( )->get_column( columnname = gc_column_name_suggestion )->set_short_text( CONV scrtext_s( gc_column_text_suggestion ) ).
         io_salv_table->get_columns( )->get_column( columnname = gc_column_name_suggestion )->set_medium_text( CONV scrtext_m( gc_column_text_suggestion ) ).
@@ -668,25 +788,38 @@ CLASS lcl_abap_source_code_getter DEFINITION FINAL.
         methods    TYPE string_table,
       END OF ts_class_methods_source,
 
+      BEGIN OF ts_fm_definition,
+        fm_name     TYPE string,
+        source_code TYPE string,
+      END OF ts_fm_definition,
+
       BEGIN OF ts_contact,
-        class     TYPE seoclsname,
+        object    TYPE seoclsname,
         component TYPE seocmpname,
         contact   TYPE sy-uname,
       END OF ts_contact,
 
       tt_contact              TYPE STANDARD TABLE OF ts_contact WITH DEFAULT KEY,
       tt_class_definition     TYPE STANDARD TABLE OF ts_class_definition WITH DEFAULT KEY,
+      tt_fm_definition        TYPE STANDARD TABLE OF ts_fm_definition WITH DEFAULT KEY,
       tt_class_methods_source TYPE STANDARD TABLE OF ts_class_methods_source WITH DEFAULT KEY.
 
     METHODS:
+      get_func_modules_source_code IMPORTING !it_fm_name             TYPE string_table
+                                   RETURNING VALUE(rt_fm_definition) TYPE tt_fm_definition,
+
       get_classes_source_code IMPORTING !it_class_name             TYPE string_table
                               RETURNING VALUE(rt_class_definition) TYPE tt_class_definition,
 
       get_classes_methods_src_code IMPORTING !it_class_name                 TYPE string_table
                                    RETURNING VALUE(rt_class_methods_source) TYPE tt_class_methods_source.
 
-    CLASS-METHODS: get_class_method_contacts IMPORTING it_class                       TYPE tt_class_name
-                                             RETURNING VALUE(rt_class_method_contact) TYPE tt_contact.
+    CLASS-METHODS:
+      get_function_module_contacts IMPORTING !it_function_module_name          TYPE tt_fm_name
+                                   RETURNING VALUE(rt_function_module_contact) TYPE tt_contact,
+
+      get_class_method_contacts IMPORTING !it_class                      TYPE tt_class_name
+                                RETURNING VALUE(rt_class_method_contact) TYPE tt_contact.
 
   PRIVATE SECTION.
 
@@ -719,7 +852,7 @@ CLASS lcl_abap_source_code_getter DEFINITION FINAL.
                                         !ev_class_pool_bridge_src_code TYPE string
                                         !ev_class_pool_ending_src_code TYPE string,
 
-      convert_seop_source_to_string IMPORTING !it_source              TYPE seop_source_string
+      convert_source_code_to_string IMPORTING !it_source              TYPE seop_source_string
                                     RETURNING VALUE(rv_source_string) TYPE string,
 
       get_public_section_src_code IMPORTING !it_include                 TYPE seop_source_string
@@ -742,6 +875,53 @@ ENDCLASS.
 CLASS lcl_abap_source_code_getter IMPLEMENTATION.
 
 
+  METHOD get_func_modules_source_code.
+
+    DATA: lv_include     TYPE rs38l-include,
+          lt_src         TYPE string_table,
+          lv_source_code TYPE string.
+
+    IF it_fm_name IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    DATA(lt_fm_name) = VALUE tt_fm_name( FOR <ls_fm> IN it_fm_name ( CONV #( <ls_fm> ) ) ).
+
+    SELECT funcname,
+           pname,
+           include
+      FROM tfdir
+      FOR ALL ENTRIES IN @lt_fm_name
+        WHERE funcname = @lt_fm_name-table_line
+    INTO TABLE @DATA(lt_fg_detail).
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    LOOP AT lt_fg_detail ASSIGNING FIELD-SYMBOL(<ls_fg_details>).
+      CALL FUNCTION 'FUNCTION_INCLUDE_CONCATENATE'
+        EXPORTING
+          include_number   = <ls_fg_details>-include
+        IMPORTING
+          include          = lv_include
+        CHANGING
+          program          = <ls_fg_details>-pname
+        EXCEPTIONS
+          not_enough_input = 1
+          no_function_pool = 2
+          OTHERS           = 3.
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
+
+      READ REPORT lv_include INTO lt_src.
+      CONCATENATE LINES OF lt_src INTO lv_source_code SEPARATED BY text_separator.
+      APPEND VALUE #( fm_name     = <ls_fg_details>-funcname
+                      source_code = lv_source_code ) TO rt_fm_definition.
+    ENDLOOP.
+  ENDMETHOD.
+
+
   METHOD get_classes_methods_src_code.
 
     IF it_class_name IS INITIAL.
@@ -756,7 +936,7 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
 
   METHOD get_classes_source_code.
 
-    DATA source_code TYPE string.
+    DATA lv_source_code TYPE string.
 
     IF it_class_name IS INITIAL.
       RETURN.
@@ -764,13 +944,13 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
 
     LOOP AT it_class_name ASSIGNING FIELD-SYMBOL(<ls_class_name>) WHERE table_line IS NOT INITIAL.
 
-      source_code = get_class_src_code( <ls_class_name> ).
-      IF source_code IS INITIAL.
+      lv_source_code = get_class_src_code( <ls_class_name> ).
+      IF lv_source_code IS INITIAL.
         CONTINUE.
       ENDIF.
 
       APPEND VALUE #( class_name  = <ls_class_name>
-                      source_code = source_code ) TO rt_class_definition.
+                      source_code = lv_source_code ) TO rt_class_definition.
 
       APPEND LINES OF get_local_classes_src_code( <ls_class_name> ) TO rt_class_definition.
     ENDLOOP.
@@ -793,11 +973,11 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    DATA(lt_local_cls_methods) = get_local_cls_methods_src_code( io_class_naming = lo_class_naming ).
+    DATA(lt_local_cls_method) = get_local_cls_methods_src_code( io_class_naming = lo_class_naming ).
 
     rt_class_methods_src_code = get_global_cl_methods_src_code( it_include = lo_class_naming->get_all_method_includes( ) ).
 
-    APPEND LINES OF lt_local_cls_methods TO rt_class_methods_src_code.
+    APPEND LINES OF lt_local_cls_method TO rt_class_methods_src_code.
   ENDMETHOD.
 
 
@@ -886,13 +1066,13 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
 
     " Locals old
     READ REPORT lo_class_naming->locals_old INTO lt_source.
-    DATA(lv_partial_src_code) = convert_seop_source_to_string( it_source = lt_source ).
+    DATA(lv_partial_src_code) = convert_source_code_to_string( it_source = lt_source ).
 
     rv_class_source_code = |{ rv_class_source_code }{ lv_partial_src_code }{ text_separator }|.
 
     " Macros
     READ REPORT lo_class_naming->macros INTO lt_source.
-    lv_partial_src_code = convert_seop_source_to_string( it_source = lt_source ).
+    lv_partial_src_code = convert_source_code_to_string( it_source = lt_source ).
 
     rv_class_source_code = |{ rv_class_source_code }{ lv_partial_src_code }{ text_separator }|.
 
@@ -907,13 +1087,13 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
 
     " Protected Section
     READ REPORT lo_class_naming->protected_section INTO lt_source.
-    lv_partial_src_code = convert_seop_source_to_string( it_source = lt_source ).
+    lv_partial_src_code = convert_source_code_to_string( it_source = lt_source ).
 
     rv_class_source_code = |{ rv_class_source_code }{ lv_partial_src_code }{ text_separator }|.
 
     " Private Section
     READ REPORT lo_class_naming->private_section INTO lt_source.
-    lv_partial_src_code = convert_seop_source_to_string( it_source = lt_source ).
+    lv_partial_src_code = convert_source_code_to_string( it_source = lt_source ).
 
     rv_class_source_code = |{ rv_class_source_code }{ lv_partial_src_code }{ text_separator }| &
                            |{ lv_class_pool_bridge_src_code }{ text_separator }|.
@@ -1004,9 +1184,9 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
 
   METHOD get_local_classes_src_code.
 
-    DATA: lt_local_classes_names TYPE string_table,
-          lo_class_naming        TYPE REF TO if_oo_class_incl_naming,
-          lt_source              TYPE seop_source_string.
+    DATA: lt_local_class_name TYPE string_table,
+          lo_class_naming     TYPE REF TO if_oo_class_incl_naming,
+          lt_source           TYPE seop_source_string.
 
     IF iv_class_name IS INITIAL.
       RETURN.
@@ -1032,25 +1212,25 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
     ENDIF.
 
     READ REPORT lo_class_naming->locals_def INTO lt_source.
-    DATA(lv_locals_def_src) = convert_seop_source_to_string( it_source = lt_source ).
+    DATA(lv_locals_def_src) = convert_source_code_to_string( it_source = lt_source ).
 
     READ REPORT lo_class_naming->locals_imp INTO lt_source.
-    DATA(lv_locals_imp_src) = convert_seop_source_to_string( it_source = lt_source ).
+    DATA(lv_locals_imp_src) = convert_source_code_to_string( it_source = lt_source ).
 
     DATA(lv_local_src) = |{ lv_locals_def_src }{ text_separator }{ lv_locals_imp_src }|.
 
     FIND ALL OCCURRENCES OF PCRE |{ gc_kw_class }\\s+(\\w\{1,30\})\\s+{ gc_kw_definition }|
     IN lv_local_src
     IGNORING CASE
-    RESULTS DATA(lt_matches).
+    RESULTS DATA(lt_match).
 
-    LOOP AT lt_matches ASSIGNING FIELD-SYMBOL(<ls_match>).
+    LOOP AT lt_match ASSIGNING FIELD-SYMBOL(<ls_match>).
       APPEND substring( val = lv_local_src
                         off = VALUE #( <ls_match>-submatches[ 1 ]-offset OPTIONAL )
-                        len = VALUE #( <ls_match>-submatches[ 1 ]-length OPTIONAL ) ) TO lt_local_classes_names.
+                        len = VALUE #( <ls_match>-submatches[ 1 ]-length OPTIONAL ) ) TO lt_local_class_name.
     ENDLOOP.
 
-    LOOP AT lt_local_classes_names ASSIGNING FIELD-SYMBOL(<ls_cls_name>).
+    LOOP AT lt_local_class_name ASSIGNING FIELD-SYMBOL(<ls_cls_name>).
       APPEND VALUE #( class_name       = iv_class_name
                       local_class_name = <ls_cls_name>
                       source_code      = extract_local_cls_by_name( iv_class_name = <ls_cls_name>
@@ -1068,20 +1248,20 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
     DATA lt_source TYPE seop_source_string.
 
     READ REPORT io_class_naming->locals_imp INTO lt_source.
-    DATA(lv_local_imp_src_code) = convert_seop_source_to_string( it_source = lt_source ).
+    DATA(lv_local_imp_src_code) = convert_source_code_to_string( it_source = lt_source ).
 
     FIND ALL OCCURRENCES OF PCRE |{ gc_kw_method }\\s+\\w\{1,30\}[\\s\\S]*?{ gc_kw_endmethod }|
     IN lv_local_imp_src_code
     IGNORING CASE
-    RESULTS DATA(lt_matches).
+    RESULTS DATA(lt_match).
 
-    LOOP AT lt_matches ASSIGNING FIELD-SYMBOL(<ls_match>).
+    LOOP AT lt_match ASSIGNING FIELD-SYMBOL(<ls_match>).
       APPEND lv_local_imp_src_code+<ls_match>-offset(<ls_match>-length) TO rt_methods_source.
     ENDLOOP.
   ENDMETHOD.
 
 
-  METHOD convert_seop_source_to_string.
+  METHOD convert_source_code_to_string.
 
     IF it_source IS INITIAL.
       RETURN.
@@ -1095,6 +1275,33 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
     ENDLOOP.
   ENDMETHOD.
 
+
+  METHOD get_function_module_contacts.
+
+    IF it_function_module_name IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    SELECT funcname,
+           cnam,
+           unam
+      FROM tfdir AS function_module INNER JOIN progdir AS program_directory
+        ON function_module~pname = program_directory~name
+      FOR ALL ENTRIES IN @it_function_module_name
+        WHERE funcname = @it_function_module_name-table_line
+    INTO TABLE @DATA(lt_fm_detail).
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    rt_function_module_contact = VALUE #( FOR <ls_detail> IN lt_fm_detail
+                                        ( object = <ls_detail>-funcname
+                                          contact = COND #( WHEN <ls_detail>-unam IS NOT INITIAL
+                                                            THEN <ls_detail>-unam
+                                                            ELSE <ls_detail>-cnam ) ) ).
+  ENDMETHOD.
+
+
   METHOD get_class_method_contacts.
 
     IF it_class IS INITIAL.
@@ -1107,9 +1314,9 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
            changedby
       FROM seoclassdf
       FOR ALL ENTRIES IN @it_class
-      WHERE clsname = @it_class-table_line
-        AND version = @gc_active_objects
-      INTO TABLE @DATA(lt_class_details).
+         WHERE clsname = @it_class-table_line
+           AND version = @gc_active_objects
+    INTO TABLE @DATA(lt_class_detail).
     IF sy-subrc <> 0.
       RETURN.
     ENDIF.
@@ -1121,13 +1328,13 @@ CLASS lcl_abap_source_code_getter IMPLEMENTATION.
            changedby
       FROM seocompodf
       FOR ALL ENTRIES IN @it_class
-          WHERE clsname = @it_class-table_line
-      INTO TABLE @DATA(lt_class_methods_details).
+         WHERE clsname = @it_class-table_line
+    INTO TABLE @DATA(lt_class_methods_detail).
 
-    lt_class_methods_details = CORRESPONDING #( BASE ( lt_class_methods_details ) lt_class_details ).
+    lt_class_methods_detail = CORRESPONDING #( BASE ( lt_class_methods_detail ) lt_class_detail ).
 
-    rt_class_method_contact = VALUE #( FOR <ls_detail> IN lt_class_methods_details
-                                       ( class = <ls_detail>-clsname
+    rt_class_method_contact = VALUE #( FOR <ls_detail> IN lt_class_methods_detail
+                                     ( object = <ls_detail>-clsname
                                        component = <ls_detail>-cmpname
                                        contact = COND #( WHEN <ls_detail>-changedby IS NOT INITIAL
                                                          THEN <ls_detail>-changedby
@@ -1140,17 +1347,20 @@ ENDCLASS.
 *** Selection Screen
 **********************************************************************
 
+TYPE-POOLS sscr.
 TABLES sscrfields.
 
 TYPES:
   BEGIN OF ts_selection_option,
     transport_request TYPE tr_trkorr,
     user              TYPE sy-uname,
-    class_name        TYPE seoclsname,
+    object_name       TYPE char30,
   END OF ts_selection_option.
 
 DATA:
-  so_selection_options TYPE ts_selection_option.
+  so_selection_options       TYPE ts_selection_option,
+  lt_search_result           TYPE RANGE OF char30,
+  lf_request_for_search_help TYPE abap_bool.
 
 SELECTION-SCREEN BEGIN OF LINE.
   SELECTION-SCREEN COMMENT (50) hdr_txt MODIF ID m1.
@@ -1172,14 +1382,14 @@ SELECTION-SCREEN BEGIN OF SCREEN 200 AS SUBSCREEN.
 SELECTION-SCREEN END OF SCREEN 200.
 
 SELECTION-SCREEN BEGIN OF SCREEN 300 AS SUBSCREEN.
-  SELECT-OPTIONS so_cls FOR so_selection_options-class_name NO INTERVALS MATCHCODE OBJECT seo_classes_interfaces.
+  SELECT-OPTIONS so_obj FOR so_selection_options-object_name NO INTERVALS.
 SELECTION-SCREEN END OF SCREEN 300.
 
 PARAMETERS: p_acttab TYPE sy-ucomm NO-DISPLAY.
 
 SELECTION-SCREEN: BEGIN OF TABBED BLOCK tb_block FOR 7 LINES,
 TAB (40) tr_tab USER-COMMAND push1,
-TAB (40) cls_tab USER-COMMAND push2,
+TAB (40) obj_tab USER-COMMAND push2,
 END OF BLOCK tb_block.
 
 SELECTION-SCREEN BEGIN OF BLOCK disp_block WITH FRAME TITLE disp.
@@ -1211,6 +1421,8 @@ SELECTION-SCREEN END OF BLOCK exp_block.
 CLASS lcl_report_helper DEFINITION FINAL.
 
   PUBLIC SECTION.
+    TYPES:
+        rt_object TYPE RANGE OF char30.
 
     CONSTANTS:
       gc_screen_number_main          TYPE syst_dynnr VALUE '1000',
@@ -1221,7 +1433,7 @@ CLASS lcl_report_helper DEFINITION FINAL.
       gc_txt_label_so_user           TYPE string VALUE 'User Name(s)',
       gc_txt_label_p_cobj            TYPE string VALUE 'Process my Transport Requests',
       gc_txt_label_p_cuser           TYPE string VALUE 'Process my Objects',
-      gc_txt_label_so_cls            TYPE string VALUE 'Objects',
+      gc_txt_label_so_obj            TYPE string VALUE 'Objects',
       gc_txt_label_p_quick           TYPE string VALUE 'Quick Review',
       gc_txt_label_p_detail          TYPE string VALUE 'Detailed Review',
       gc_txt_label_p_alv             TYPE string VALUE 'Display in ALV',
@@ -1239,6 +1451,7 @@ CLASS lcl_report_helper DEFINITION FINAL.
       gc_info_button_text            TYPE string VALUE 'User Manual',
       gc_prompt_editor_button_text   TYPE string VALUE 'Prompt Editor',
       gc_trasport_tab_title          TYPE string VALUE 'Get Transports by:',
+      gc_objects_search_help_title   TYPE string VALUE 'Available objects',
 
       gc_uc_tranports_tab            TYPE syucomm VALUE 'PUSH1',
       gc_uc_objects_tab              TYPE syucomm VALUE 'PUSH2',
@@ -1250,7 +1463,9 @@ CLASS lcl_report_helper DEFINITION FINAL.
       gc_p_name_user                 TYPE c LENGTH 8 VALUE 'P_CUSER',
       gc_p_name_path                 TYPE c LENGTH 8 VALUE 'P_PATH',
       gc_p_path_modif_id             TYPE c LENGTH 8 VALUE 'PID',
-      gc_so_name_classes             TYPE c LENGTH 8 VALUE 'SO_CLS',
+      gc_so_name_objects             TYPE c LENGTH 8 VALUE 'SO_OBJ',
+      gc_so_obj_low                  TYPE screen-name VALUE 'SO_OBJ-LOW',
+      gc_so_obj_high                 TYPE screen-name VALUE 'SO_OBJ-HIGH',
       gc_so_tr_low                   TYPE screen-name VALUE 'SO_TR-LOW',
       gc_so_tr_high                  TYPE screen-name VALUE 'SO_TR-HIGH',
       gc_so_user_low                 TYPE screen-name VALUE 'SO_USER-LOW',
@@ -1262,11 +1477,13 @@ CLASS lcl_report_helper DEFINITION FINAL.
       gc_msg_cl_name_not_specified   TYPE string VALUE 'Class name must be specified',
       gc_msg_no_source_code          TYPE string VALUE 'No source code to review',
       gc_msg_so_only_eq_allowed      TYPE string VALUE 'Only EQ (equals) is allowed',
+      gc_msg_not_found               TYPE string VALUE 'Nothing has been found',
 
       gc_screen_true                 TYPE c VALUE '1',
       gc_screen_false                TYPE c VALUE '0'.
 
-    CLASS-METHODS: initialize,
+    CLASS-METHODS:
+      initialize,
 
       process_at_selection_screen,
 
@@ -1274,36 +1491,50 @@ CLASS lcl_report_helper DEFINITION FINAL.
 
       process_start_of_selection,
 
-      setup_text_lables.
+      get_selection_option_input IMPORTING !iv_selection_option_name TYPE screen-name
+                                 RETURNING VALUE(rv_input)           TYPE string,
+
+      get_available_objects IMPORTING !iv_search_pattern         TYPE string
+                            RETURNING VALUE(rt_range_of_objects) TYPE rt_object,
+
+      setup_text_labels,
+
+      setup_so_object_restrictions.
 
   PRIVATE SECTION.
 
     CLASS-METHODS:
-      get_programm_description RETURNING VALUE(rv_description) TYPE string.
+      get_program_description RETURNING VALUE(rv_description) TYPE string.
 
 ENDCLASS.
 
+
+
 CLASS lcl_report_helper IMPLEMENTATION.
+
 
   METHOD initialize.
 
     hdr_txt = gc_programm_title.
     tr_tab  = gc_tab_name_by_transports.
-    cls_tab = gc_tab_name_by_objects.
+    obj_tab = gc_tab_name_by_objects.
     exp     = gc_export_block_title.
     disp    = gc_display_block_title.
     trtbtxt = gc_trasport_tab_title.
     pe_btn_t = gc_prompt_editor_button_text.
 
-    tb_block-prog  = sy-repid.
+    tb_block-prog = sy-repid.
 
     tb_block-dynnr = gc_tab_number_transport.
+
+    setup_so_object_restrictions( ).
 
     IF p_prompt IS INITIAL.
       p_prompt = lcl_ai_helper=>get_default_prompt( ).
     ENDIF.
 
   ENDMETHOD.
+
 
   METHOD process_at_selection_screen.
 
@@ -1312,7 +1543,7 @@ CLASS lcl_report_helper IMPLEMENTATION.
       WHEN gc_uc_programm_description.
 
         IF sy-dynnr = gc_screen_number_main.
-          cl_demo_output=>display_html( html = get_programm_description( ) ).
+          cl_demo_output=>display_html( html = get_program_description( ) ).
         ENDIF.
 
       WHEN gc_uc_tranports_tab.
@@ -1353,9 +1584,9 @@ CLASS lcl_report_helper IMPLEMENTATION.
         ENDIF.
 
         IF tb_block-dynnr = gc_tab_number_objects.
-          IF so_cls IS INITIAL.
+          IF so_obj IS INITIAL.
             MESSAGE gc_msg_cl_name_not_specified TYPE 'E'.
-            SET CURSOR FIELD gc_so_name_classes.
+            SET CURSOR FIELD gc_so_name_objects.
           ENDIF.
         ENDIF.
 
@@ -1397,12 +1628,6 @@ CLASS lcl_report_helper IMPLEMENTATION.
       ENDIF.
     ENDLOOP.
 
-    LOOP AT so_cls ASSIGNING FIELD-SYMBOL(<cls>).
-      IF <cls>-option <> 'EQ'.
-        MESSAGE gc_msg_so_only_eq_allowed TYPE 'E'.
-      ENDIF.
-    ENDLOOP.
-
   ENDMETHOD.
 
   METHOD process_at_sel_screen_output.
@@ -1439,6 +1664,11 @@ CLASS lcl_report_helper IMPLEMENTATION.
           screen-invisible = gc_screen_true.
         ENDIF.
         MODIFY SCREEN.
+        IF screen-name = gc_so_obj_high.
+          screen-active = gc_screen_false.
+          screen-invisible = gc_screen_true.
+          MODIFY SCREEN.
+        ENDIF.
       ENDIF.
     ENDLOOP.
 
@@ -1446,25 +1676,24 @@ CLASS lcl_report_helper IMPLEMENTATION.
 
   METHOD process_start_of_selection.
 
-    DATA:
-      lt_class      TYPE tt_class_name,
-      lv_name       TYPE string,
-      lv_prompt     TYPE stringval,
-      lt_suggestion TYPE tt_suggestion.
+    DATA: lt_object     TYPE tt_object_definition,
+          lv_name       TYPE string,
+          lv_prompt     TYPE stringval,
+          lt_suggestion TYPE tt_suggestion.
 
 * Get objects from data sources
 
-    DATA(lo_tr_extractor) = NEW lcl_transport_extractor( ).
+    DATA(lo_tr_extractor) = NEW lcl_object_extractor( ).
 
     CASE tb_block-dynnr.
 
       WHEN gc_tab_number_transport.
-        lt_class = lo_tr_extractor->get_class_from_tr_request( iv_fl_current_objects_only = p_cobj
-                                                               iv_fl_current_user_only = p_cuser
-                                                               it_tr_requests_headers = VALUE #( FOR <ls_req> IN so_tr[]   ( trkorr = <ls_req>-low ) )
-                                                               it_user = VALUE #(                FOR <ls_usr> IN so_user[] ( CONV #( <ls_usr>-low ) ) ) ).
+        lt_object = lo_tr_extractor->get_objects_by_tr_requests( iv_fl_current_objects_only = p_cobj
+                                                                  iv_fl_current_user_only = p_cuser
+                                                                  it_tr_request_header = VALUE #( FOR <ls_req> IN so_tr[]   ( trkorr = <ls_req>-low ) )
+                                                                  it_user = VALUE #(              FOR <ls_usr> IN so_user[] ( CONV #( <ls_usr>-low ) ) ) ).
       WHEN gc_tab_number_objects.
-        lt_class = VALUE #( FOR <class> IN so_cls[] ( <class>-low ) ).
+        lt_object = lo_tr_extractor->get_objects_by_names( VALUE #( FOR <lv_obj_name> IN so_obj[] ( CONV #( <lv_obj_name>-low ) ) ) ).
       WHEN OTHERS.
         RETURN.
     ENDCASE.
@@ -1473,50 +1702,73 @@ CLASS lcl_report_helper IMPLEMENTATION.
 
     DATA(lo_class_src_code_getter) = NEW lcl_abap_source_code_getter( ).
 
-    DATA(lt_classes_src_code) = lo_class_src_code_getter->get_classes_source_code(
-                                  VALUE #( FOR <ls_class> IN lt_class ( CONV #( <ls_class> ) ) ) ).
-    IF lt_classes_src_code IS INITIAL.
+    DATA(lt_class_src_code) = lo_class_src_code_getter->get_classes_source_code(
+                                  VALUE #( FOR <ls_object> IN lt_object WHERE ( object_type = lcl_object_extractor=>gc_object_def_type_class ) ( <ls_object>-object_name ) ) ).
+
+    DATA(lt_fms_src_code) = lo_class_src_code_getter->get_func_modules_source_code(
+                                  VALUE #( FOR <ls_object> IN lt_object WHERE ( object_type = lcl_object_extractor=>gc_object_def_type_fm ) ( <ls_object>-object_name ) ) ).
+
+    IF lt_class_src_code IS INITIAL
+    AND lt_fms_src_code IS INITIAL.
       MESSAGE gc_msg_no_source_code TYPE 'I' DISPLAY LIKE 'E'.
       RETURN.
     ENDIF.
 
     " Detailed mode includes quick + method-by-method review
     IF p_detail = abap_true.
-      DATA(lt_classes_methods_src_code) = lo_class_src_code_getter->get_classes_methods_src_code(
-                                            VALUE #( FOR <ls_class> IN lt_class ( CONV #( <ls_class> ) ) ) ).
+      DATA(lt_class_method_src_code) = lo_class_src_code_getter->get_classes_methods_src_code(
+                                            VALUE #( FOR <ls_object> IN lt_object WHERE ( object_type = lcl_object_extractor=>gc_object_def_type_class ) ( <ls_object>-object_name ) ) ).
     ENDIF.
 
-    DATA(lo_suggestion_helper)    = NEW lcl_suggestions_exporter( ).
-    DATA(lt_class_method_contact) = lcl_abap_source_code_getter=>get_class_method_contacts( lt_class ).
-    DATA(lv_target_prompt)        = lcl_ai_helper=>get_final_prompt( p_prompt ).
+    DATA(lo_suggestion_helper) = NEW lcl_suggestions_exporter( ).
+    DATA(lt_class_contact) = lcl_abap_source_code_getter=>get_class_method_contacts(
+                                VALUE #( FOR <ls_object> IN lt_object WHERE ( object_type = lcl_object_extractor=>gc_object_def_type_class ) ( CONV #( <ls_object>-object_name ) ) ) ).
+    DATA(lt_fm_contact) = lcl_abap_source_code_getter=>get_function_module_contacts(
+                                VALUE #( FOR <ls_object> IN lt_object WHERE ( object_type = lcl_object_extractor=>gc_object_def_type_fm ) ( CONV #( <ls_object>-object_name ) ) ) ).
+
+
+    DATA(lv_target_prompt) = lcl_ai_helper=>get_final_prompt( p_prompt ).
+
+    " Review function modules
+    LOOP AT lt_fms_src_code ASSIGNING FIELD-SYMBOL(<ls_fm_src_code>).
+      lv_prompt = |{ lv_target_prompt }{ <ls_fm_src_code>-source_code }|.
+
+      APPEND LINES OF lcl_ai_helper=>deserialize_suggestions(
+                      iv_object_type = VALUE #( lt_object[ object_name = <ls_fm_src_code>-fm_name ]-object_type OPTIONAL )
+                      iv_object_name = |{ <ls_fm_src_code>-fm_name }|
+                      iv_user       = VALUE #( lt_fm_contact[ object = CONV #( <ls_fm_src_code>-fm_name ) ]-contact OPTIONAL )
+                      iv_json       = lcl_ai_helper=>execute_prompt( lv_prompt ) ) TO lt_suggestion.
+    ENDLOOP.
 
     " Review entire class
-    LOOP AT lt_classes_src_code ASSIGNING FIELD-SYMBOL(<ls_src_code>).
+    LOOP AT lt_class_src_code ASSIGNING FIELD-SYMBOL(<ls_src_code>).
 
       lv_prompt = |{ lv_target_prompt }{ <ls_src_code>-source_code }|.
 
       APPEND LINES OF lcl_ai_helper=>deserialize_suggestions(
-                        iv_class_name = |{ <ls_src_code>-class_name } { <ls_src_code>-local_class_name }|
-                        iv_user       = VALUE #( lt_class_method_contact[ class = CONV #( <ls_src_code>-class_name ) ]-contact OPTIONAL )
+                        iv_object_type = VALUE #( lt_object[ object_name = <ls_src_code>-class_name ]-object_type OPTIONAL )
+                        iv_object_name = |{ <ls_src_code>-class_name } { <ls_src_code>-local_class_name }|
+                        iv_user       = VALUE #( lt_class_contact[ object = CONV #( <ls_src_code>-class_name ) ]-contact OPTIONAL )
                         iv_json       = lcl_ai_helper=>execute_prompt( lv_prompt ) ) TO lt_suggestion.
     ENDLOOP.
 
     " Method by method review
-    LOOP AT lt_classes_methods_src_code ASSIGNING FIELD-SYMBOL(<ls_class_method_src_code>).
+    LOOP AT lt_class_method_src_code ASSIGNING FIELD-SYMBOL(<ls_class_method_src_code>).
       LOOP AT <ls_class_method_src_code>-methods ASSIGNING FIELD-SYMBOL(<ls_method>).
 
         lv_prompt = |{ lv_target_prompt }{ <ls_method> }|.
 
-        lv_name = VALUE #( lt_class_method_contact[
-                           class = CONV #( <ls_src_code>-class_name )
+        lv_name = VALUE #( lt_class_contact[
+                           object = CONV #( <ls_src_code>-class_name )
                            component = CONV #( <ls_method> ) ]-contact OPTIONAL ).
         IF lv_name IS INITIAL.
-          lv_name = VALUE #( lt_class_method_contact[
-                             class = CONV #( <ls_src_code>-class_name ) ]-contact OPTIONAL ).
+          lv_name = VALUE #( lt_class_contact[
+                             object = CONV #( <ls_src_code>-class_name ) ]-contact OPTIONAL ).
         ENDIF.
 
         APPEND LINES OF lcl_ai_helper=>deserialize_suggestions(
-                          iv_class_name = <ls_class_method_src_code>-class_name
+                          iv_object_type = VALUE #( lt_object[ object_name = <ls_class_method_src_code>-class_name ]-object_type OPTIONAL )
+                          iv_object_name = <ls_class_method_src_code>-class_name
                           iv_user       = lv_name
                           iv_json       = lcl_ai_helper=>execute_prompt( lv_prompt ) ) TO lt_suggestion.
       ENDLOOP.
@@ -1546,7 +1798,8 @@ CLASS lcl_report_helper IMPLEMENTATION.
 
   ENDMETHOD.
 
-  METHOD get_programm_description.
+
+  METHOD get_program_description.
     RETURN
         |<h1>AI Code Review Tool – User Documentation</h1>| &&
         || &&
@@ -1560,8 +1813,8 @@ CLASS lcl_report_helper IMPLEMENTATION.
         || &&
         |<h2>Supported Objects</h2>| &&
         || &&
-        |<p>At the moment the program supports only ABAP classes. | &&
-        |Support for function modules and reports may be added in the future.</p>| &&
+        |<p>At the moment the program supports ABAP classes and function modules. | &&
+        |Support reports may be added in the future.</p>| &&
         || &&
         |<h2>Selecting Objects for Review</h2>| &&
         || &&
@@ -1605,22 +1858,79 @@ CLASS lcl_report_helper IMPLEMENTATION.
         |<h2>Initial Setup</h2>| &&
         || &&
         |<p>To use the tool, you need access to any reasoning LLM API. | &&
-        |Before running the report, one method must be implemented in the| &&
-        |code (the location is marked). | &&
+        |Before running the report, one method must be implemented in the code (the location is marked). | &&
         |Your implementation should call any reasoning LLM with a single string as input and return a single string as output.</p>| &&
         || &&
-        |<p>The program was designed to work without ABAP Git, so| &&
-        |installation is straightforward. | &&
-        |You can copy and paste the program code into local objects in| &&
-        |your system and start using it.</p>|.
+        |<p>The program was designed to work without ABAP Git, so installation is straightforward. | &&
+        |You can copy and paste the program code into local objects in your system and start using it.</p>|.
   ENDMETHOD.
 
-  METHOD setup_text_lables.
+
+  METHOD get_selection_option_input.
+
+    DATA lt_dynpfield TYPE TABLE OF dynpread.
+
+    APPEND VALUE #( fieldname = lcl_report_helper=>gc_so_obj_low ) TO lt_dynpfield.
+
+    CALL FUNCTION 'DYNP_VALUES_READ'
+      EXPORTING
+        dyname     = sy-cprog
+        dynumb     = sy-dynnr
+      TABLES
+        dynpfields = lt_dynpfield
+      EXCEPTIONS
+        OTHERS     = 1.
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    RETURN VALUE #( lt_dynpfield[ fieldname = lcl_report_helper=>gc_so_obj_low ]-fieldvalue OPTIONAL ).
+  ENDMETHOD.
+
+
+  METHOD get_available_objects.
+
+    DATA: lt_result    TYPE tt_object_definition,
+          lv_cancelled TYPE abap_bool.
+
+    DATA(lv_serach_pattern) = iv_search_pattern.
+    IF lv_serach_pattern IS INITIAL.
+      lv_serach_pattern = '*'.
+    ENDIF.
+
+    DATA(lo_object_extractor) = NEW lcl_object_extractor( ).
+    DATA(lt_value) = lo_object_extractor->get_objects_by_names( it_object_name = VALUE string_table( ( |{ lv_serach_pattern }| ) ) ).
+
+    IF lt_value IS INITIAL.
+      MESSAGE gc_msg_not_found TYPE 'I'.
+      RETURN.
+    ENDIF.
+
+    DATA(lo_value_help) = cl_reca_gui_f4_popup=>factory_grid( id_title   = gc_objects_search_help_title
+                                                              it_f4value = lt_value ).
+
+    lo_value_help->set_multi( if_multi = abap_false ).
+    lo_value_help->set_classic_layout( if_classic_layout = abap_true ).
+
+    lo_value_help->display( IMPORTING et_result    = lt_result
+                                      ef_cancelled = lv_cancelled ).
+
+    IF lv_cancelled = abap_true.
+      RETURN.
+    ENDIF.
+
+    RETURN VALUE rt_object( FOR <lv_obj_name> IN lt_result ( sign   = 'I'
+                                                             option = 'EQ'
+                                                             low    = <lv_obj_name>-object_name ) ).
+  ENDMETHOD.
+
+
+  METHOD setup_text_labels.
     %_so_tr_%_app_%-text    = gc_txt_label_so_tr.
     %_so_user_%_app_%-text  = gc_txt_label_so_user.
     %_p_cobj_%_app_%-text   = gc_txt_label_p_cobj.
     %_p_cuser_%_app_%-text  = gc_txt_label_p_cuser.
-    %_so_cls_%_app_%-text   = gc_txt_label_so_cls.
+    %_so_obj_%_app_%-text   = gc_txt_label_so_obj.
     %_p_quick_%_app_%-text  = gc_txt_label_p_quick.
     %_p_detail_%_app_%-text = gc_txt_label_p_detail.
     %_p_alv_%_app_%-text    = gc_txt_label_p_alv.
@@ -1629,6 +1939,24 @@ CLASS lcl_report_helper IMPLEMENTATION.
     %_p_xl_srv_%_app_%-text = gc_txt_label_p_xl_srv.
     %_p_path_%_app_%-text   = gc_txt_label_p_path.
   ENDMETHOD.
+
+
+  METHOD setup_so_object_restrictions.
+
+    DATA(ls_res) = VALUE sscr_restrict( opt_list_tab = VALUE #( ( name       = gc_so_name_objects
+                                                                  options-eq = abap_true
+                                                                  options-cp = abap_true ) )
+                                        ass_tab      = VALUE #( ( kind       = 'S'
+                                                                  name       = gc_so_name_objects
+                                                                  sg_main    = 'I'
+                                                                  op_main    = gc_so_name_objects ) ) ).
+
+    CALL FUNCTION 'SELECT_OPTIONS_RESTRICT'
+      EXPORTING
+        restriction = ls_res.
+  ENDMETHOD.
+
+
 ENDCLASS.
 
 INITIALIZATION.
@@ -1638,13 +1966,20 @@ INITIALIZATION.
 
   lcl_report_helper=>initialize( ).
 
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR so_obj-low.
+
+  DATA(lv_search_pattern) = lcl_report_helper=>get_selection_option_input( iv_selection_option_name = lcl_report_helper=>gc_so_obj_low ).
+
+  lt_search_result = lcl_report_helper=>get_available_objects( iv_search_pattern = lv_search_pattern ).
+  so_obj = VALUE #( lt_search_result[ 1 ] OPTIONAL ).
+
 AT SELECTION-SCREEN.
 
   lcl_report_helper=>process_at_selection_screen( ).
 
 AT SELECTION-SCREEN OUTPUT.
 
-  lcl_report_helper=>setup_text_lables( ).
+  lcl_report_helper=>setup_text_labels( ).
 
   lcl_report_helper=>process_at_sel_screen_output( ).
 
