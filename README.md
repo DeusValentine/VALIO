@@ -1,6 +1,6 @@
 <img width="1280" height="640" alt="VALIO" src="https://github.com/user-attachments/assets/ca324913-da24-482e-834a-bed739119da8" />
 
-VALIO. — ABAP Code Review AI Tool 
+VALIO. - ABAP Code Review AI Tool 
 
 Original Authors:
 - Valentine Liolia :suspect:
